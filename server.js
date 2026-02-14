@@ -13,7 +13,20 @@ const io = new Server(server, {
   },
 });
 
-// ...
+io.on("connection", (socket) => {
+  console.log("cliente conectado");
+
+  socket.on("disconnect", () => {
+    console.log("cliente desconectado");
+  });
+});
+
+app.get("/", (req, res) => {
+  res.send("Realtime service running");
+});
+
+const PORT = process.env.PORT || 3002;
+
 server.listen(PORT, "0.0.0.0", () => {
   console.log("Server running on port " + PORT);
 });
