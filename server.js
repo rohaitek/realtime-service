@@ -3,71 +3,78 @@ const http = require("http");
 const { Server } = require("socket.io");
 
 const app = express();
+app.use(express.json()); // 👈 necesario para leer el body del broadcast
+
 const server = http.createServer(app);
 
-// ✅ CORS recomendado (producción + dev)
-// Si aún no tiene localhost en uso, puede quitarlo.
-const allowedOrigins = [
-  "https://cisasolutions.cloud",
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-];
+// 🔐 mismo secret que puso en WAUW
+const BROADCAST_SECRET = process.env.REALTIME_BROADCAST_SECRET || "";
 
+// CORS (puede ajustar luego)
 const io = new Server(server, {
   cors: {
-    origin: allowedOrigins,
+    origin: [
+      "https://cisasolutions.cloud",
+      "http://localhost:3000",
+      "http://127.0.0.1:3000",
+    ],
     methods: ["GET", "POST"],
-    allowedHeaders: ["Content-Type"],
-    credentials: false, // póngalo true SOLO si usa cookies/sesión
+    credentials: false,
   },
 });
 
-// ✅ helper para obtener tenantId de forma segura
+// helper para tenant
 function getTenantId(socket) {
   const raw = socket.handshake.auth?.tenantId;
-
-  // acepta number o string numérica
-  if (raw === undefined || raw === null) return null;
+  if (!raw) return null;
 
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return null;
 
-  return String(n); // lo dejamos como string para armar room estable
+  return String(n);
 }
 
+// 🧠 conexión socket
 io.on("connection", (socket) => {
   const tenantId = getTenantId(socket);
 
-  if (!tenantId) {
-    console.log("cliente conectado SIN tenant", socket.id);
-    // Si prefiere bloquear conexiones sin tenant, descomente:
-    // socket.disconnect(true);
-    // return;
-  } else {
+  if (tenantId) {
     const room = `tenant:${tenantId}`;
     socket.join(room);
     console.log("cliente conectado", socket.id, "→", room);
+  } else {
+    console.log("cliente conectado SIN tenant", socket.id);
   }
-
-  // ✅ evento de prueba: reenvía SOLO al tenant del emisor
-  socket.on("test", (payload) => {
-    const tId = getTenantId(socket);
-    if (!tId) return;
-
-    const room = `tenant:${tId}`;
-    io.to(room).emit("test:echo", {
-      from: socket.id,
-      tenantId: tId,
-      payload: payload ?? null,
-      at: new Date().toISOString(),
-    });
-  });
 
   socket.on("disconnect", (reason) => {
     console.log("cliente desconectado", socket.id, reason);
   });
 });
 
+// 📡 endpoint para que WAUW dispare eventos
+app.post("/api/broadcast", (req, res) => {
+  if (!BROADCAST_SECRET || req.body?.secret !== BROADCAST_SECRET) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  const { tenantId, event, payload } = req.body || {};
+
+  if (!tenantId || !event) {
+    return res
+      .status(400)
+      .json({ error: "tenantId and event required" });
+  }
+
+  const room = `tenant:${String(tenantId)}`;
+
+  console.log("📣 broadcast →", room, event);
+
+  io.to(room).emit(event, payload ?? {});
+
+  res.json({ ok: true });
+});
+
+// health check
 app.get("/", (req, res) => {
   res.send("Realtime service running");
 });
